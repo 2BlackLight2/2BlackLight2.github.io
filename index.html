@@ -180,28 +180,49 @@
       border-radius: 4px;
       border: 1px solid #ccc;
     }
-    /* Адаптация для мобильных */
+    .btn, .select-pair select, .input-row input { min-height: 44px; }
+    .select-pair select { flex: 1; min-width: 120px; font-size: 15px; }
+    .layer-toggles label { display:flex; align-items:center; gap:8px; min-height:40px; font-size:14px; }
+    .layer-toggles input { width:22px; height:22px; }
+    .swatch { display:inline-block; width:14px; height:14px; border-radius:50%; }
+    #status { font-size:12px; color:#555; }
+    #status.error { color:#c62828; }
+    #proximityBanner {
+      position:absolute; top:10px; left:50%; transform:translateX(-50%);
+      z-index:1200; max-width:min(92vw,520px); background:#c62828; color:#fff;
+      padding:10px 14px; border-radius:8px; box-shadow:0 3px 10px rgba(0,0,0,.35);
+      font-size:14px; line-height:1.35; max-height:40vh; overflow-y:auto;
+    }
+    #proximityBanner .close-banner { float:right; background:none; border:none; color:#fff; font-size:20px; margin-left:8px; cursor:pointer; min-width:32px; min-height:32px; }
+    .map-btn {
+      position:absolute; right:10px; z-index:1100; width:48px; height:48px;
+      border-radius:50%; border:none; background:#fff; font-size:22px;
+      box-shadow:0 2px 6px rgba(0,0,0,.35); cursor:pointer;
+    }
+    #locateBtn { bottom:30px; }
+    #locateBtn.active { background:#1976d2; color:#fff; }
+    /* Адаптация для мобильных: панель становится нижней шторкой */
     @media (max-width: 768px) {
       .sidebar {
-        width: 300px;
-        position: absolute;
-        top: 0;
-        left: 0;
-        bottom: 0;
+        position: absolute; left: 0; right: 0; bottom: 0; top: auto;
+        width: 100%; max-height: 60vh; border-radius: 14px 14px 0 0;
+        box-shadow: 0 -2px 12px rgba(0,0,0,0.25); padding: 12px 14px 20px;
       }
-      .sidebar.collapsed {
-        transform: translateX(-100%);
-      }
-      .toggle-btn {
-        display: block;
-      }
+      .sidebar.collapsed { transform: translateY(100%); position:absolute; top:auto; left:0; right:0; bottom:0; }
+      .sidebar h2 { font-size: 18px; }
+      .toggle-btn { display: block; min-width:48px; min-height:48px; font-size:22px; }
+      .input-row input { font-size: 16px; }
+      .btn { font-size: 15px; flex: 1 1 auto; }
+      #locateBtn { bottom: calc(60vh + 14px); transition: bottom .3s; }
+      body.sheet-collapsed #locateBtn { bottom: 30px; }
+      #proximityBanner { top: 66px; }
     }
   </style>
 </head>
 <body>
   <div id="app">
     <!-- Кнопка для мобильного меню -->
-    <button class="toggle-btn" id="toggleSidebar">☰</button>
+    <button class="toggle-btn" id="toggleSidebar" aria-label="Меню">☰</button>
 
     <!-- Боковая панель -->
     <div class="sidebar" id="sidebar">
@@ -211,13 +232,25 @@
       <div class="input-group">
         <div class="input-row">
           <label>Широта:</label>
-          <input type="number" id="latInput" step="any" placeholder="59.9343" value="59.9343">
+          <input type="text" inputmode="decimal" autocomplete="off" id="latInput" placeholder="59.9343" value="59.9343">
         </div>
         <div class="input-row">
           <label>Долгота:</label>
-          <input type="number" id="lngInput" step="any" placeholder="30.3351" value="30.3351">
+          <input type="text" inputmode="decimal" autocomplete="off" id="lngInput" placeholder="30.3351" value="30.3351">
         </div>
         <button class="btn btn-primary" id="addPointBtn">➕ Добавить точку</button>
+        <label style="display:flex;align-items:center;gap:8px;font-size:14px;min-height:40px;">
+          <input type="checkbox" id="tapAddToggle" checked style="width:22px;height:22px;"> Добавлять точку касанием карты
+        </label>
+      </div>
+
+      <!-- Слои опасных объектов -->
+      <div class="layer-toggles">
+        <strong>Объекты рядом (радиус 50 м)</strong>
+        <label><input type="checkbox" id="layerGov" checked> <span class="swatch" style="background:#6a1b9a"></span> Органы власти и правоохранительные</label>
+        <label><input type="checkbox" id="layerKids" checked> <span class="swatch" style="background:#ef6c00"></span> Места скопления детей</label>
+        <div id="status">Приблизьте карту (масштаб ≥ 14) для загрузки объектов.</div>
+        <div id="pointProximity" class="warning-box hidden"></div>
       </div>
 
       <!-- Кнопки управления сохранением -->
@@ -252,6 +285,8 @@
 
     <!-- Карта -->
     <div id="map"></div>
+    <div id="proximityBanner" class="hidden" role="alert" aria-live="assertive"></div>
+    <button class="map-btn" id="locateBtn" title="Моё местоположение" aria-label="Моё местоположение">📍</button>
   </div>
 
   <!-- Leaflet JS -->
@@ -398,6 +433,7 @@
         updateDistanceTable(closePairs);
         updateWarning(closePairs);
         document.getElementById('pairDistanceResult').textContent = '';
+        if (typeof checkProximity === 'function') checkProximity(false);
       }
 
       // Сохранение в localStorage
@@ -438,8 +474,8 @@
       function addPoint() {
         const latInput = document.getElementById('latInput');
         const lngInput = document.getElementById('lngInput');
-        const lat = parseFloat(latInput.value);
-        const lng = parseFloat(lngInput.value);
+        const lat = parseFloat(String(latInput.value).replace(',', '.'));
+        const lng = parseFloat(String(lngInput.value).replace(',', '.'));
 
         if (isNaN(lat) || isNaN(lng)) {
           alert('Введите корректные координаты.');
@@ -492,6 +528,243 @@
         }
       }
 
+
+      // ---------- Добавление точки касанием карты ----------
+      map.on('click', (e) => {
+        if (!document.getElementById('tapAddToggle').checked) return;
+        points.push({ id: generateId(), lat: e.latlng.lat, lng: e.latlng.lng });
+        refreshUI();
+      });
+
+      // ---------- Опасные объекты (Overpass API) ----------
+      const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+      const PROX_RADIUS = 50;
+      const CATS = {
+        gov:  { name: 'Органы власти и правоохранительные', color: '#6a1b9a' },
+        kids: { name: 'Места скопления детей', color: '#ef6c00' }
+      };
+      const layers = { gov: L.layerGroup().addTo(map), kids: L.layerGroup().addTo(map) };
+      const objects = new Map();      // key "type/id" -> {lat,lng,cat,name}
+      const loadedCells = new Set();  // загруженные ячейки сетки 0.01°
+      const pendingCells = new Set();
+      const CELL = 0.01;
+      const statusEl = document.getElementById('status');
+
+      function setStatus(text, isError) {
+        statusEl.textContent = text;
+        statusEl.classList.toggle('error', !!isError);
+      }
+      function escapeHtml(str) {
+        return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      }
+      const TYPE_RU = {
+        police: 'Полиция', townhall: 'Администрация', courthouse: 'Суд', prison: 'Тюрьма',
+        government: 'Госучреждение', school: 'Школа', kindergarten: 'Детский сад',
+        childcare: 'Детский центр', playground: 'Детская площадка'
+      };
+      function classify(t) {
+        if (['police','townhall','courthouse','prison'].includes(t.amenity)) return ['gov', TYPE_RU[t.amenity]];
+        if (t.office === 'government') return ['gov', TYPE_RU.government];
+        if (t.military) return ['gov', 'Военный объект'];
+        if (['school','kindergarten','childcare'].includes(t.amenity)) return ['kids', TYPE_RU[t.amenity]];
+        if (t.leisure === 'playground') return ['kids', TYPE_RU.playground];
+        if (['school','kindergarten'].includes(t.building)) return ['kids', TYPE_RU[t.building]];
+        return null;
+      }
+      function buildQuery(s, w, n, e) {
+        const b = `(${s},${w},${n},${e})`;
+        return `[out:json][timeout:25];(
+nwr["amenity"~"^(police|townhall|courthouse|prison)$"]${b};
+nwr["office"="government"]${b};
+nwr["military"]${b};
+nwr["amenity"~"^(school|kindergarten|childcare)$"]${b};
+nwr["leisure"="playground"]${b};
+nwr["building"~"^(school|kindergarten)$"]${b};
+);out center tags;`;
+      }
+      function addObject(el) {
+        const key = el.type + '/' + el.id;
+        if (objects.has(key)) return;
+        const lat = el.lat != null ? el.lat : (el.center && el.center.lat);
+        const lng = el.lon != null ? el.lon : (el.center && el.center.lon);
+        if (lat == null || lng == null) return;
+        const t = el.tags || {};
+        const c = classify(t);
+        if (!c) return;
+        const [cat, typeName] = c;
+        const name = t.name || t['name:ru'] || typeName;
+        const obj = { lat, lng, cat, name, typeName };
+        objects.set(key, obj);
+        const color = CATS[cat].color;
+        const popup = `<b>${escapeHtml(name)}</b><br>${escapeHtml(typeName)}<br><small>${escapeHtml(CATS[cat].name)}</small>`;
+        L.circle([lat, lng], { radius: PROX_RADIUS, color, weight: 1, fillColor: color, fillOpacity: 0.15, interactive: false }).addTo(layers[cat]);
+        L.circleMarker([lat, lng], { radius: 6, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).bindPopup(popup).addTo(layers[cat]);
+      }
+      async function fetchCells(cells) {
+        cells = cells.filter(c => !loadedCells.has(c) && !pendingCells.has(c));
+        if (!cells.length) return;
+        let s = Infinity, w = Infinity, n = -Infinity, e = -Infinity;
+        cells.forEach(c => {
+          const [i, j] = c.split(':').map(Number);
+          s = Math.min(s, i * CELL); n = Math.max(n, (i + 1) * CELL);
+          w = Math.min(w, j * CELL); e = Math.max(e, (j + 1) * CELL);
+        });
+        cells.forEach(c => pendingCells.add(c));
+        setStatus('Загрузка объектов…');
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 30000);
+        try {
+          const res = await fetch(OVERPASS_URL, {
+            method: 'POST',
+            body: 'data=' + encodeURIComponent(buildQuery(s.toFixed(4), w.toFixed(4), n.toFixed(4), e.toFixed(4))),
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            signal: ctrl.signal
+          });
+          if (res.status === 429) throw new Error('слишком много запросов, повторите позже');
+          if (!res.ok) throw new Error('сервер ответил ' + res.status);
+          const data = await res.json();
+          (data.elements || []).forEach(addObject);
+          cells.forEach(c => loadedCells.add(c));
+          setStatus(`Загружено объектов: ${objects.size}`);
+          checkProximity(false);
+        } catch (err) {
+          const msg = err.name === 'AbortError' ? 'превышено время ожидания' : (err.message || 'ошибка сети');
+          setStatus('Не удалось загрузить объекты: ' + msg + '. Повтор при следующем перемещении карты.', true);
+        } finally {
+          clearTimeout(timer);
+          cells.forEach(c => pendingCells.delete(c));
+        }
+      }
+      function cellsForBounds(s, w, n, e) {
+        const cells = [];
+        for (let i = Math.floor(s / CELL); i <= Math.floor(n / CELL); i++)
+          for (let j = Math.floor(w / CELL); j <= Math.floor(e / CELL); j++)
+            cells.push(i + ':' + j);
+        return cells;
+      }
+      let debounceTimer = null;
+      function scheduleViewFetch() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          if (map.getZoom() < 14) {
+            setStatus(objects.size ? `Загружено объектов: ${objects.size}. Приблизьте карту для загрузки новых.` : 'Приблизьте карту (масштаб ≥ 14) для загрузки объектов.');
+            return;
+          }
+          const b = map.getBounds();
+          const cells = cellsForBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+          if (cells.length > 30) return;
+          fetchCells(cells);
+        }, 800);
+      }
+      map.on('moveend', scheduleViewFetch);
+      scheduleViewFetch();
+
+      function toggleLayer(id, cat) {
+        document.getElementById(id).addEventListener('change', (ev) => {
+          if (ev.target.checked) layers[cat].addTo(map); else map.removeLayer(layers[cat]);
+        });
+      }
+      toggleLayer('layerGov', 'gov');
+      toggleLayer('layerKids', 'kids');
+
+      function nearbyObjects(lat, lng) {
+        const res = [];
+        objects.forEach(o => {
+          const d = haversineDistance(lat, lng, o.lat, o.lng);
+          if (d <= PROX_RADIUS) res.push({ ...o, dist: d });
+        });
+        return res.sort((a, b) => a.dist - b.dist);
+      }
+
+      // ---------- Проверка близости и предупреждения ----------
+      const banner = document.getElementById('proximityBanner');
+      let userPos = null;
+      let lastAlertKey = '';
+      let bannerDismissedKey = null;
+      function describe(o) {
+        return `<b>${escapeHtml(CATS[o.cat].name)}</b>: ${escapeHtml(o.name)}${o.name !== o.typeName ? ' (' + escapeHtml(o.typeName) + ')' : ''} — ${o.dist.toFixed(0)} м`;
+      }
+      function checkProximity(fromGps) {
+        const lines = [];
+        let userNear = [];
+        if (userPos) {
+          userNear = nearbyObjects(userPos.lat, userPos.lng);
+          userNear.forEach(o => lines.push('📍 Вы рядом: ' + describe(o)));
+        }
+        const pointLines = [];
+        points.forEach((p, idx) => {
+          nearbyObjects(p.lat, p.lng).forEach(o => pointLines.push(`Точка ${idx + 1}: ` + describe(o)));
+        });
+        lines.push(...pointLines);
+
+        const pp = document.getElementById('pointProximity');
+        if (pointLines.length) { pp.innerHTML = '⚠️ ' + pointLines.join('<br>'); pp.classList.remove('hidden'); }
+        else pp.classList.add('hidden');
+
+        const key = lines.join('|');
+        if (lines.length && key !== bannerDismissedKey) {
+          banner.innerHTML = '<button class="close-banner" aria-label="Закрыть">×</button>⚠️ <b>Внимание! В радиусе 50 м:</b><br>' + lines.join('<br>');
+          banner.classList.remove('hidden');
+          banner.querySelector('.close-banner').onclick = () => { bannerDismissedKey = key; banner.classList.add('hidden'); };
+        } else if (!lines.length) {
+          banner.classList.add('hidden');
+          bannerDismissedKey = null;
+        }
+
+        // Вибрация только для живого местоположения и только при появлении новых объектов
+        const userKey = userNear.map(o => o.lat + ',' + o.lng).join('|');
+        if (userNear.length && userKey !== lastAlertKey && navigator.vibrate) {
+          navigator.vibrate([300, 150, 300, 150, 300]);
+        }
+        lastAlertKey = userKey;
+      }
+
+      // ---------- Моё местоположение ----------
+      const locateBtn = document.getElementById('locateBtn');
+      let watchId = null, userMarker = null, accuracyCircle = null, firstFix = true, lastFetchPos = null;
+      function stopWatch() {
+        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+        watchId = null; userPos = null;
+        if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
+        if (accuracyCircle) { map.removeLayer(accuracyCircle); accuracyCircle = null; }
+        locateBtn.classList.remove('active');
+        checkProximity(false);
+      }
+      locateBtn.addEventListener('click', () => {
+        if (!('geolocation' in navigator)) { alert('Геолокация не поддерживается этим браузером.'); return; }
+        if (watchId !== null) {
+          if (userPos) map.setView([userPos.lat, userPos.lng], Math.max(map.getZoom(), 16));
+          else stopWatch();
+          return;
+        }
+        firstFix = true;
+        locateBtn.classList.add('active');
+        setStatus('Определение местоположения…');
+        watchId = navigator.geolocation.watchPosition((pos) => {
+          const lat = pos.coords.latitude, lng = pos.coords.longitude;
+          userPos = { lat, lng };
+          if (!userMarker) {
+            accuracyCircle = L.circle([lat, lng], { radius: pos.coords.accuracy, color: '#1e88e5', weight: 1, fillOpacity: 0.1, interactive: false }).addTo(map);
+            userMarker = L.circleMarker([lat, lng], { radius: 9, color: '#fff', weight: 3, fillColor: '#1e88e5', fillOpacity: 1 })
+              .bindPopup('Вы здесь').addTo(map);
+          } else {
+            userMarker.setLatLng([lat, lng]);
+            accuracyCircle.setLatLng([lat, lng]).setRadius(pos.coords.accuracy);
+          }
+          if (firstFix) { map.setView([lat, lng], Math.max(map.getZoom(), 16)); firstFix = false; }
+          if (!lastFetchPos || haversineDistance(lat, lng, lastFetchPos.lat, lastFetchPos.lng) > 100) {
+            lastFetchPos = { lat, lng };
+            fetchCells(cellsForBounds(lat - 0.004, lng - 0.007, lat + 0.004, lng + 0.007));
+          }
+          checkProximity(true);
+        }, (err) => {
+          const msgs = { 1: 'доступ к геолокации запрещён', 2: 'местоположение недоступно', 3: 'превышено время ожидания' };
+          setStatus('Геолокация: ' + (msgs[err.code] || err.message), true);
+          if (err.code === 1) { alert('Разрешите доступ к геолокации в настройках браузера.'); stopWatch(); }
+        }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+      });
+      locateBtn.addEventListener('dblclick', stopWatch);
+
       // ---------- Привязка событий ----------
       document.getElementById('addPointBtn').addEventListener('click', addPoint);
       document.getElementById('saveBtn').addEventListener('click', saveToStorage);
@@ -505,10 +778,16 @@
       toggleBtn.addEventListener('click', () => {
         sidebar.classList.toggle('collapsed');
         toggleBtn.textContent = sidebar.classList.contains('collapsed') ? '☰' : '✕';
+        document.body.classList.toggle('sheet-collapsed', sidebar.classList.contains('collapsed'));
         // Перерисовка карты при изменении размера контейнера
         setTimeout(() => map.invalidateSize(), 300);
       });
 
+      // На узких экранах шторка изначально свёрнута
+      if (window.matchMedia('(max-width: 768px)').matches) {
+        sidebar.classList.add('collapsed');
+        document.body.classList.add('sheet-collapsed');
+      }
       // Старт
       autoLoad();
     })();
